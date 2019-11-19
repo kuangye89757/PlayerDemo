@@ -18,96 +18,179 @@ Java_com_diaochan_playerdemo_WangyiPlayer_native_1start(JNIEnv *env, jobject thi
                                                         jobject surface) {
 
     const char *path = env->GetStringUTFChars(path_, 0);
-    avformat_network_init();
-    AVFormatContext * formatContext = avformat_alloc_context();
-    //1、打开URL
+
+   
+    /**
+     * FFmpeg 视频绘制开始
+     */
+    avformat_network_init();//初始化网络模块
+
+    /**
+     * 第一步：获取AVFormatContext (针对当前视频的 总上下文)
+     */
+    AVFormatContext *formatContext = avformat_alloc_context();
+
+    // 设置视频相关信息
     AVDictionary *opts = NULL;
-    //设置超时3秒
-    av_dict_set(&opts, "timeout", "3000000", 0);
-    //强制指定AVFormatContext中AVInputFormat的。这个参数一般情况下可以设置为NULL，这样FFmpeg可以自动检测AVInputFormat。
-    //输入文件的封装格式
-//    av_find_input_format("avi")
-//    ret为零 表示成功
+    av_dict_set(&opts, "timeout", "3000000", 0);//3秒超时 单位微秒
+
+    // 打开视频文件
     int ret = avformat_open_input(&formatContext, path, NULL, &opts);
-    avformat_find_stream_info(formatContext, NULL);
-//视频时长（单位：微秒us，转换为秒需要除以1000000）
-    int vidio_stream_idx=-1;
+    if (ret) {
+        //在 FFmpeg的函数中一般，返回0表示成功
+        return;
+    }
+    avformat_find_stream_info(formatContext, NULL);//通知FFmpeg解析流
+
+    // 遍历上下文中的所有流，找到视频流
+    int video_stream_index = -1;
     for (int i = 0; i < formatContext->nb_streams; ++i) {
+        /**
+         * AVMEDIA_TYPE_VIDEO -- 视频
+         * AVMEDIA_TYPE_AUDIO -- 音频
+         * AVMEDIA_TYPE_SUBTITLE -- 字幕
+         */
         if (formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            vidio_stream_idx=i;
+            video_stream_index = i;
             break;
         }
     }
-    AVCodecParameters *codecpar = formatContext->streams[vidio_stream_idx]->codecpar;
-    //找到解码器
-    AVCodec *dec = avcodec_find_decoder(codecpar->codec_id);
-    //创建上下文
-    AVCodecContext *codecContext = avcodec_alloc_context3(dec);
+
+    // 获取视频流解码参数 AVCodecParameters
+    AVCodecParameters *codecpar = formatContext->streams[video_stream_index]->codecpar;
+
+    /**
+     * 第二步：根据AVCodecParameters中的id,获取解码器AVCodec  
+     * 并创建解码器上下文 AVCodecContext
+     * 
+     * 【带数字的函数，越大数字表示越新】
+     */
+    AVCodec *avcodec = avcodec_find_decoder(codecpar->codec_id);
+    AVCodecContext *codecContext = avcodec_alloc_context3(avcodec);
+
+    //将解码器参数传入到上下文
+    // 这样解码器上下文AVCodecContext 和 解码器AVCodec 都有参数的信息
     avcodec_parameters_to_context(codecContext, codecpar);
-//版本升级了
-    avcodec_open2(codecContext, dec, NULL);
-    //读取包
+
+    /**
+     * 第三步：打开解码器
+     */
+    avcodec_open2(codecContext, avcodec, NULL);
+
+
+    /**
+     * 第四步：解码 YUV数据（存在于AVPacket）
+     * 
+     */
     AVPacket *packet = av_packet_alloc();
-//    像素数据
-    SwsContext *sws_ctx = sws_getContext(
-            codecContext->width, codecContext->height, codecContext->pix_fmt,
-            codecContext->width, codecContext->height, AV_PIX_FMT_RGBA,
-            SWS_BILINEAR, 0, 0, 0);
 
 
+    /**
+     *  转换上下文SwsContext初始化
+     *  
+     * （通过转换上下文SwsContext 转换帧数据为RGB图像数据）
+     * 
+     * codecContext->width,codecContext->height 视频的宽高可通过播放器信息查看
+     * codecContext->pix_fmts 视频编码方式
+     * 
+     * 转换方式:
+     *      重视速度：fast_bilinear,point
+     *      重视质量：cubic,spline,lanczos,gauss
+     *      
+     * 
+     * 
+     * 
+     * struct SwsContext *sws_getContext(
+     * 
+     *    int srcW, int srcH, enum AVPixelFormat srcFormat, //输入源
+          int dstW, int dstH, enum AVPixelFormat dstFormat, //输出源
+          int flags, //转换方式
+          SwsFilter *srcFilter,SwsFilter *dstFilter, const double *param);
+     */
+    SwsContext *swsContext = sws_getContext(codecContext->width, codecContext->height,
+                                            codecContext->pix_fmt,
+                                            codecContext->width, codecContext->height,
+                                            AV_PIX_FMT_RGBA,
+                                            SWS_BILINEAR, 0, 0, 0);
+
+    /**
+    * 创建一个来自于Surface的Window
+    * 内部有一个缓冲区 用来底层渲染
+    */
     ANativeWindow *nativeWindow = ANativeWindow_fromSurface(env, surface);
-//    视频缓冲区
-    ANativeWindow_Buffer outBuffer;
-    //创建新的窗口用于视频显示
-//    ANativeWindow
-    int frameCount = 0;
-    ANativeWindow_setBuffersGeometry(nativeWindow, codecContext->width,
-                                     codecContext->height,
+    //设置缓冲区的大小
+    ANativeWindow_setBuffersGeometry(nativeWindow, codecContext->width, codecContext->height,
                                      WINDOW_FORMAT_RGBA_8888);
-    while (av_read_frame(formatContext, packet)>=0) {
+    //视频缓冲区
+    ANativeWindow_Buffer outBuffer;
+
+    //从视频流中读取一个数据包 返回值小于0表示读取完成或错误
+    while (av_read_frame(formatContext, packet) >= 0) {
         avcodec_send_packet(codecContext, packet);
         AVFrame *frame = av_frame_alloc();
         ret = avcodec_receive_frame(codecContext, frame);
         if (ret == AVERROR(EAGAIN)) {
-            //需要更多数据
+            //重试
             continue;
         } else if (ret < 0) {
+            //结束位
             break;
         }
-        uint8_t *dst_data[0];
-        int dst_linesize[0];
-        av_image_alloc(dst_data, dst_linesize,
-                       codecContext->width, codecContext->height, AV_PIX_FMT_RGBA, 1);
 
-        if (packet->stream_index == vidio_stream_idx) {
-//非零   正在解码
-            if (ret==0) {
-//            绘制之前   配置一些信息  比如宽高   格式
+        /**
+         * 第五步：绘制 （通过转换上下文SwsContext AVFrame转换为RGB图像数据）
+         */
+        uint8_t *dst_data[0];//接收的容器 rgba
+        int dst_linesize[0];//每一行首地址
+        //开辟空间 赋值dst_linesize
+        av_image_alloc(dst_data, dst_linesize, codecContext->width, codecContext->height,
+                       AV_PIX_FMT_RGBA, 1/**左对齐*/);
 
-//            绘制
-                ANativeWindow_lock(nativeWindow, &outBuffer, NULL);
-//     h 264   ----yuv          RGBA
-                //转为指定的YUV420P
-                sws_scale(sws_ctx,
-                          reinterpret_cast<const uint8_t *const *>(frame->data), frame->linesize, 0,
-                          frame->height,
-                          dst_data, dst_linesize);
-//rgb_frame是有画面数据
-                uint8_t *dst= (uint8_t *) outBuffer.bits;
-//            拿到一行有多少个字节 RGBA
-                int destStride=outBuffer.stride*4;
-                uint8_t *src_data = dst_data[0];
-                int src_linesize = dst_linesize[0];
-                uint8_t *firstWindown = static_cast<uint8_t *>(outBuffer.bits);
-                for (int i = 0; i < outBuffer.height; ++i) {
-                    memcpy(firstWindown + i * destStride, src_data + i * src_linesize, destStride);
-                }
-                ANativeWindow_unlockAndPost(nativeWindow);
-                usleep(1000 * 16);
-                av_frame_free(&frame);
+
+        
+        if(packet->stream_index == video_stream_index && ret == 0){
+
+
+            /**
+             * 第六步：渲染到surface
+             * 
+             * AVFrame(yuv) --> Image(RGBA dst_data) --> surfaceView
+             */
+            ANativeWindow_lock(nativeWindow, &outBuffer, NULL);//上锁
+            
+            //帧的首地址:frame->linesize
+            /**输入源信息*/
+            // 参数1：转换上下文
+            // 参数2：当前帧数据
+            // 参数3：当前帧首地址 （知道首地址就能绘制整个帧）
+            // 参数4：偏移量 （这里不用偏移）
+            /**输出源信息*/
+            // 参数5：接收的容器 rgba
+            sws_scale(swsContext, reinterpret_cast<const uint8_t *const *>(frame->data),
+                      frame->linesize, 0, frame->height,
+                      dst_data, dst_linesize);
+
+            //输入源
+            int destStride = outBuffer.stride * 4;//获取一行多少字节
+            uint8_t *src_data = dst_data[0];
+            int src_linesize = dst_linesize[0];
+            uint8_t *firstWindown = static_cast<uint8_t *>(outBuffer.bits);
+            
+            
+            for (int i = 0; i < outBuffer.height; ++i) {
+                //内存拷贝 加快渲染效率
+                memcpy(firstWindown + i * destStride, src_data + i * src_linesize, destStride);
             }
+
+            ANativeWindow_unlockAndPost(nativeWindow);//解锁
+            usleep(1000 * 16);
+            av_frame_free(&frame);
         }
     }
+
+    /**
+     * 第七步：资源释放
+     */
     ANativeWindow_release(nativeWindow);
     avcodec_close(codecContext);
     avformat_free_context(formatContext);
