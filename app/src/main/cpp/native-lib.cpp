@@ -40,7 +40,9 @@ Java_com_diaochan_playerdemo_WangyiPlayer_native_1start(JNIEnv *env, jobject thi
         //在 FFmpeg的函数中一般，返回0表示成功
         return;
     }
-    avformat_find_stream_info(formatContext, NULL);//通知FFmpeg解析流
+
+    // 获取输入的文件信息
+    avformat_find_stream_info(formatContext, NULL);
 
     // 遍历上下文中的所有流，找到视频流
     int video_stream_index = -1;
@@ -51,7 +53,7 @@ Java_com_diaochan_playerdemo_WangyiPlayer_native_1start(JNIEnv *env, jobject thi
          * AVMEDIA_TYPE_SUBTITLE -- 字幕
          */
         if (formatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            video_stream_index = i;
+            video_stream_index = i; 
             break;
         }
     }
@@ -86,7 +88,7 @@ Java_com_diaochan_playerdemo_WangyiPlayer_native_1start(JNIEnv *env, jobject thi
 
 
     /**
-     *  转换上下文SwsContext初始化
+     *  初始化视频转换上下文SwsContext
      *  
      * （通过转换上下文SwsContext 转换帧数据为RGB图像数据）
      * 
@@ -116,7 +118,7 @@ Java_com_diaochan_playerdemo_WangyiPlayer_native_1start(JNIEnv *env, jobject thi
     /**
     * 创建一个来自于Surface的Window
     * 内部有一个缓冲区 用来底层渲染
-    */
+    */ 
     ANativeWindow *nativeWindow = ANativeWindow_fromSurface(env, surface);
     //设置缓冲区的大小
     ANativeWindow_setBuffersGeometry(nativeWindow, codecContext->width, codecContext->height,
@@ -125,6 +127,8 @@ Java_com_diaochan_playerdemo_WangyiPlayer_native_1start(JNIEnv *env, jobject thi
     ANativeWindow_Buffer outBuffer;
 
     //从视频流中读取一个数据包 返回值小于0表示读取完成或错误
+    // AVPacket: 压缩数据
+    // AVFrame : 未压缩数据
     while (av_read_frame(formatContext, packet) >= 0) {
         avcodec_send_packet(codecContext, packet);
         AVFrame *frame = av_frame_alloc();
