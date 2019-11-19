@@ -139,6 +139,7 @@ Java_com_diaochan_playerdemo_WangyiPlayer_native_1start(JNIEnv *env, jobject thi
 
         /**
          * 第五步：绘制 （通过转换上下文SwsContext AVFrame转换为RGB图像数据）
+         * 统一转换成可显示的格式
          */
         uint8_t *dst_data[0];//接收的容器 rgba
         int dst_linesize[0];//每一行首地址
